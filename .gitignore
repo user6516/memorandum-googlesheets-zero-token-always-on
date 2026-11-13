@@ -1,0 +1,28 @@
+# Local credentials / service bindings
+.env
+.env.*
+!.env.example
+.clasp.json
+.clasprc.json
+credentials*.json
+client_secret*.json
+service-account*.json
+*.pem
+*.key
+
+# Personal settings, tasks, screenshots and logs
+*.local.*
+private/
+exports/
+screenshots/
+*.log
+
+# Development output
+node_modules/
+coverage/
+dist/
+*.zip
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/

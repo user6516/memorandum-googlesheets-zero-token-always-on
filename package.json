@@ -1,0 +1,14 @@
+{
+  "name": "memorandum",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Google Sheets + Apps Script personal email reminders with zero AI token usage",
+  "engines": {
+    "node": ">=18"
+  },
+  "scripts": {
+    "test": "node tests/test.cjs",
+    "check:privacy": "node scripts/check-privacy.cjs",
+    "check": "npm test && npm run check:privacy"
+  }
+}
