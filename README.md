@@ -1,4 +1,4 @@
-# Memorandum
+# Memorandum-googlesheets-zero-token-always-on
 
 **基于 Google Sheets + Google Apps Script 的、不依赖个人 AI 服务的个人邮件备忘录。**
 
