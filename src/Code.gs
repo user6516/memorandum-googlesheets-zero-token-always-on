@@ -21,19 +21,7 @@ function setup() {
     if (previousId && previousId !== ss.getId()) throw new Error('本程序已绑定另一张表格。');
     let sheet = ss.getSheetByName(CONFIG.sheetName);
     if (!sheet) sheet = ss.insertSheet(CONFIG.sheetName);
-    const headers = ['事务', 'DDL', '已完成', '任务编号（自动）', '校验结果（自动）'];
-    if (sheet.getLastRow() === 0) {
-      sheet.getRange(1, 1, 1, 5).setValues([headers]).setFontWeight('bold');
-      sheet.getRange(2, 2, sheet.getMaxRows() - 1, 1).setNumberFormat('yyyy/mm/dd hh:mm');
-      sheet.getRange(2, 3, sheet.getMaxRows() - 1, 1).insertCheckboxes();
-      sheet.setFrozenRows(1);
-      sheet.setColumnWidth(1, 300);
-      sheet.setColumnWidth(2, 180);
-      sheet.setColumnWidth(5, 320);
-      sheet.hideColumns(4);
-    } else if (JSON.stringify(sheet.getRange(1, 1, 1, 5).getValues()[0]) !== JSON.stringify(headers)) {
-      throw new Error('“备忘录”工作表已存在且表头不同。请先将原工作表改名，再运行 setup。');
-    }
+    prepareSheet_(sheet);
     // Date 单元格由表格时区解释；统一为北京时间。
     ss.setSpreadsheetTimeZone(CONFIG.timezone);
     props.setProperty(PREFIX + 'spreadsheet', ss.getId());
@@ -49,9 +37,47 @@ function setup() {
   });
 }
 
+// 兼容原五列表格：只在最左侧插入自动时间列，保留原数据与任务编号。
+function prepareSheet_(sheet) {
+  const oldHeaders = ['事务', 'DDL', '已完成', '任务编号（自动）', '校验结果（自动）'];
+  const headers = ['时间（自动）', '事务', 'DDL', '已完成', '任务编号（自动）', '校验结果（自动）'];
+  const empty = sheet.getLastRow() === 0;
+  if (!empty) {
+    const current = sheet.getRange(1, 1, 1, 6).getValues()[0];
+    if (JSON.stringify(current.slice(0, 5)) === JSON.stringify(oldHeaders)) {
+      sheet.insertColumnBefore(1);
+    } else if (JSON.stringify(current) !== JSON.stringify(headers)) {
+      throw new Error('“备忘录”工作表已存在且表头不同。请先将原工作表改名，再运行 setup。');
+    }
+  }
+  if (sheet.getMaxRows() < 2) sheet.insertRowsAfter(1, 1);
+  sheet.getRange(1, 1, 1, 6).setValues([headers]).setFontWeight('bold');
+  sheet.getRange(2, 1, sheet.getMaxRows() - 1, 1).setNumberFormat('@');
+  sheet.getRange(2, 3, sheet.getMaxRows() - 1, 1).setNumberFormat('yyyy/mm/dd hh:mm');
+  const checkboxes = sheet.getRange(2, 4, sheet.getMaxRows() - 1, 1);
+  if (empty) checkboxes.insertCheckboxes();
+  else checkboxes.setDataValidation(SpreadsheetApp.newDataValidation().requireCheckbox().build());
+  sheet.setFrozenRows(1);
+  [130, 300, 180, 90, 180, 320].forEach(function (width, index) { sheet.setColumnWidth(index + 1, width); });
+  sheet.hideColumns(5);
+  // 条件格式即时响应勾选；取消后自动恢复。标记只用于替换本程序的规则。
+  const marker = PREFIX + 'completed';
+  const rules = sheet.getConditionalFormatRules().filter(function (rule) {
+    const condition = rule.getBooleanCondition();
+    return !condition || !condition.getCriteriaValues().some(function (value) {
+      return String(value).indexOf(marker) >= 0;
+    });
+  });
+  const completedRule = SpreadsheetApp.newConditionalFormatRule()
+    .whenFormulaSatisfied('=AND(N("' + marker + '")=0,OR($D2=TRUE,$D2="已完成"))')
+    .setBackground('#e0e0e0').setFontColor('#757575').setStrikethrough(true)
+    .setRanges([sheet.getRange(2, 1, sheet.getMaxRows() - 1, sheet.getMaxColumns())]).build();
+  sheet.setConditionalFormatRules([completedRule].concat(rules));
+}
+
 function memoEdited(e) {
   if (e && e.range && e.range.getSheet().getName() !== CONFIG.sheetName) return;
-  if (e && e.range && (e.range.getColumn() > 3 || e.range.getLastRow() < 2)) return;
+  if (e && e.range && (e.range.getColumn() > 4 || e.range.getLastRow() < 2)) return;
   measured_(function () { syncNow(); });
 }
 
@@ -76,28 +102,35 @@ function syncUnlocked_() {
   const tasks = [];
   const seen = {};
   if (count > 0) {
-    const rows = sheet.getRange(2, 1, count, 5).getValues();
-    const formulas = sheet.getRange(2, 1, count, 3).getFormulas();
+    const rows = sheet.getRange(2, 1, count, 6).getValues();
+    const formulas = sheet.getRange(2, 2, count, 3).getFormulas();
     const metadata = rows.map(function (row, index) {
-      const title = String(row[0]).trim();
-      if (!title && !row[1]) return ['', ''];
-      let taskId = String(row[3]).trim();
+      const title = String(row[1]).trim();
+      if (!title && !row[2]) return ['', ''];
+      let taskId = String(row[4]).trim();
       if (!/^[0-9a-f-]{36}$/i.test(taskId) || seen[taskId]) taskId = Utilities.getUuid();
       seen[taskId] = true;
       if (formulas[index].some(function (x) { return x !== ''; })) return [taskId, '请直接填写事务、日期、完成状态，不使用公式'];
       if (!title) return [taskId, '缺少事务名称，暂不提醒'];
-      const due = parseDue_(row[1]);
+      const due = parseDue_(row[2]);
       if (due === null) return [taskId, 'DDL 无效，请填写完整日期和时间，例如 2026/11/20 18:00'];
-      const done = row[2] === true || String(row[2]).trim() === '已完成';
-      if (!done && row[2] !== false && String(row[2]).trim() !== '' && String(row[2]).trim() !== '未完成') {
+      const done = row[3] === true || String(row[3]).trim() === '已完成';
+      if (!done && row[3] !== false && String(row[3]).trim() !== '' && String(row[3]).trim() !== '未完成') {
         return [taskId, '请使用复选框，或填写“已完成 / 未完成”'];
       }
       if (!done) tasks.push({ id: taskId, title: title, due: due });
       return [taskId, done ? '已完成，不再提醒' : '有效'];
     });
     if (tasks.length > 500) throw new Error('本轻量版本最多支持 500 条未完成任务。');
-    if (metadata.some(function (value, i) { return value[0] !== rows[i][3] || value[1] !== rows[i][4]; })) {
-      sheet.getRange(2, 4, count, 2).setValues(metadata);
+    if (metadata.some(function (value, i) { return value[0] !== rows[i][4] || value[1] !== rows[i][5]; })) {
+      sheet.getRange(2, 5, count, 2).setValues(metadata);
+    }
+    const times = rows.map(function (row, index) {
+      const due = formulas[index][1] ? null : parseDue_(row[2]);
+      return [due === null ? '' : formatShortDue_(due)];
+    });
+    if (times.some(function (value, i) { return value[0] !== rows[i][0]; })) {
+      sheet.getRange(2, 1, count, 1).setValues(times);
     }
   }
   state.tasks = tasks;
@@ -187,6 +220,12 @@ function parseDue_(value) {
   if (date.getUTCFullYear() !== parts[0] || date.getUTCMonth() !== parts[1] - 1 || date.getUTCDate() !== parts[2]
     || date.getUTCHours() !== parts[3] || date.getUTCMinutes() !== parts[4] || date.getUTCSeconds() !== parts[5]) return null;
   return ms - 8 * HOUR;
+}
+
+function formatShortDue_(ms) {
+  const china = new Date(ms + 8 * HOUR);
+  return '周' + '日一二三四五六'[china.getUTCDay()] + ' '
+    + String(china.getUTCHours()).padStart(2, '0') + ':' + String(china.getUTCMinutes()).padStart(2, '0');
 }
 
 function taskKey_(task) { return task.id + ':' + task.due; }
