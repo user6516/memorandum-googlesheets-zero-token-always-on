@@ -1,8 +1,13 @@
 // 基础发布前检查。只输出相对文件名及问题类型，不打印匹配到的秘密值。
 const fs = require('node:fs');
 const path = require('node:path');
+const crypto = require('node:crypto');
 const root = path.resolve(__dirname, '..');
 const ignoredDirectories = new Set(['.git', 'node_modules', 'coverage', 'dist']);
+// 已人工检查画面与 EXIF 的说明图；内容变化后必须重新检查并更新摘要。
+const reviewedImages = new Map([
+  ['docs/images/completed-rows.jpg', 'e93978e0ddc8353e6a31b8dc552d592cc1a4c20988b1d9602714e22a2ede0338'],
+]);
 const problems = [];
 let checked = 0;
 function walk(directory) {
@@ -14,6 +19,11 @@ function walk(directory) {
     checked++;
     if (/^(?:\.env(?:\..+)?|\.clasprc\.json|\.clasp\.json)$/.test(entry.name) && entry.name !== '.env.example') {
       problems.push([relative, '本地凭据或账号绑定文件']);
+    }
+    if (reviewedImages.has(relative)) {
+      const digest = crypto.createHash('sha256').update(fs.readFileSync(file)).digest('hex');
+      if (digest !== reviewedImages.get(relative)) problems.push([relative, '说明图片已变更，需要重新人工检查']);
+      continue;
     }
     if (/\.(?:png|jpe?g|gif|pdf|xlsx?|csv|zip|pem|key)$/i.test(entry.name)) {
       problems.push([relative, '不应直接发布的个人数据或二进制文件']); continue;
@@ -32,4 +42,4 @@ walk(root);
 if (problems.length) {
   problems.forEach(([file, reason]) => console.error(`${file}: ${reason}`));
   process.exitCode = 1;
-} else console.log(`Privacy check passed: ${checked} files; only placeholders and example email addresses found.`);
+} else console.log(`Privacy check passed: ${checked} files; text scan passed and documentation images matched reviewed hashes.`);
